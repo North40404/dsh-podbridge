@@ -120,7 +120,7 @@ Copy-Item -Path '<工作区>' `
    而且不报错。**同一函数里有多个分支时，逐个确认都有返回值。**
 2. **WebView 不自带下载能力**：`<a download>` 在 WebView 里不触发保存，无法显示的类型（apk/zip）
    点击后毫无反应；`.txt` 因为被内联打开，看起来"正常"，掩盖了问题。
-   宿主必须实现 `DownloadManager` 接管（本项目通过 `PodShell.downloadFile()` 暴露给页面）。
+   宿主必须实现 `DownloadManager` 接管，并把它通过 JS 桥暴露给页面（具体接口名由客户端自己定）。
 3. **工具可见性在 agent 创建时固定**：插件注册之后新建的会话才有该工具；老会话看不到，
    插件重载也不会补上。所以"给模型用的工具"要同时准备一条 HTTP 兜底路径。
 4. **Windows 批处理必须 CRLF，且 .vbs 不能带 BOM**：用脚本生成 .bat 时默认是 LF，
@@ -216,7 +216,7 @@ GUI 端口每个会话不同，用运行时上下文里的 URL；桥接端口默
 
 ## 九、下一步
 
-1. **Pod App**：先做网页版（`pod-app/web`），浏览器里跑通再包壳（Windows=Electron，Android=Capacitor）
+1. **客户端**：先做网页版，浏览器里跑通再包壳（Windows=Electron，Android=系统 WebView 自写壳）
 2. **组网**：先用局域网，功能验证完再配 frp / Tailscale
 3. 桥接侧只剩小事：`closed` 帧的客户端配合（属于 App）、消息落盘（可不做）
 \r': command not found`**：
@@ -312,6 +312,6 @@ GUI 端口每个会话不同，用运行时上下文里的 URL；桥接端口默
 
 ## 九、下一步
 
-1. **Pod App**：先做网页版（`pod-app/web`），浏览器里跑通再包壳（Windows=Electron，Android=Capacitor）
+1. **客户端**：先做网页版，浏览器里跑通再包壳（Windows=Electron，Android=系统 WebView 自写壳）
 2. **组网**：先用局域网，功能验证完再配 frp / Tailscale
 3. 桥接侧只剩小事：`closed` 帧的客户端配合（属于 App）、消息落盘（可不做）
