@@ -1,0 +1,32 @@
+{
+    "name":  "dsh-podbridge",
+    "version":  "0.1.0",
+    "private":  true,
+    "type":  "module",
+    "description":  "Pod App 与 DSH 会话之间的桥接：把聊天消息投进会话，把回复推回聊天软件",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./client":  "./client.js",
+                    "./locale/*.json":  "./locale/*.json"
+                },
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web"
+                           }
+            },
+    "files":  [
+                  "index.js",
+                  "client.js",
+                  "cordis.patch.yml",
+                  "src",
+                  "locale/*.json",
+                  "README.md"
+              ],
+    "scripts":  {
+                    "test":  "node --test --test-isolation=none test/"
+                },
+    "license": "MIT"
+}

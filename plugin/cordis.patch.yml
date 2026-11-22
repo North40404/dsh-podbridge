@@ -1,0 +1,8 @@
+# dsh-podbridge 的 bundle patch。
+#
+# 只插入一行：桥接本体（Host 服务 + 设置页）。
+# 聊天软件 Pod App 不在这里——它是独立客户端，只认《Pod 桥接协议 v1》。
+- insert:
+    - id: podbridge
+      name: dsh-podbridge
+      config: {}
