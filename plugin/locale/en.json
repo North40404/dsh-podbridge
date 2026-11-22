@@ -1,1 +1,1 @@
-{"name":"Pod Bridge","description":"Connect a Pod App chat to one DSH session."}
+{"name":"Pod Bridge","description":"Bridge a chat client to a DSH session: client messages go into the session, replies go back to the client."}

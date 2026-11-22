@@ -1,1 +1,1 @@
-{"name":"Pod 桥接","description":"把 Pod App 的聊天接到一个 DSH 会话。"}
+{"name":"Pod 桥接","description":"把聊天客户端的消息接到一个 DSH 会话：消息投进会话，回复推回客户端。"}
