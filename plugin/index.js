@@ -756,6 +756,7 @@ export function apply(ctx) {
       maxWindowSec: settings.maxWindowSec,
       maxMsgs: settings.maxMsgs,
       splitPrompt: settings.splitPrompt,
+      sendFileEndpoint: settings.sendFileEndpoint === true,
     }
   }
 
@@ -972,6 +973,15 @@ export function apply(ctx) {
             body = raw ? JSON.parse(raw) : {}
           } catch {
             sendJson(res, 400, { ok: false, error: 'invalid_json' })
+            return
+          }
+          // 热生效开关：每次请求都读当前配置，改设置立刻起作用，不用重载插件
+          if (!settings.sendFileEndpoint) {
+            sendJson(res, 403, {
+              ok: false,
+              error: 'endpoint_disabled',
+              hint: '发文件端点默认关闭。到桥接设置页打开「开放发文件端点」后再试。',
+            })
             return
           }
           try {

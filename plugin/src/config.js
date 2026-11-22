@@ -38,9 +38,17 @@ export const DEFAULTS = Object.freeze({
   fileWhitelist: true,
   /** 出站白名单目录（换行分隔）。留空用默认：工作区 + 下载目录 */
   fileAllowDirs: '',
+  /**
+   * 是否开放 HTTP 发文件端点（POST /api/dsh-podbridge/send-file）。
+   *
+   * 默认关闭：它是给"工具不可见的老会话 / 脚本"用的兜底通道，
+   * 正常对话用 pod_send_file 就够了。开着等于在本机管理面上多开一个
+   * "能把白名单内文件推到手机"的入口，所以默认不留。
+   */
+  sendFileEndpoint: false,
 })
 
-/** 默认文件目录：<目录>\pod-files（非 Windows 退回家目录下 pod-files）。 */
+/** 默认文件目录：`<目录>\pod-files`（非 Windows 退回家目录下 pod-files）。 */
 export function defaultFileDir() {
   if (process.platform === 'win32') return 'D:\\Tool\\pod-files'
   return path.join(os.homedir(), 'pod-files')
@@ -108,7 +116,13 @@ export function validatePatch(patch) {
       if (typeof raw !== 'boolean') errors[key] = '必须是 true 或 false'
       else value[key] = raw
       continue
-    }    if (key === 'fileWhitelist') {
+    }
+    if (key === 'sendFileEndpoint') {
+      if (typeof raw !== 'boolean') errors[key] = '必须是 true 或 false'
+      else value[key] = raw
+      continue
+    }
+    if (key === 'fileWhitelist') {
       if (typeof raw !== 'boolean') errors[key] = '必须是 true 或 false'
       else value[key] = raw
       continue
