@@ -506,7 +506,9 @@ export function apply(ctx) {
         sendJson(res, 413, { ok: false, error: 'file_too_large', maxMB: settings.maxFileMB })
         return
       }
-      const meta = files.save(Buffer.concat(chunks), name)
+      // 客户端可以显式声明类型（表情包没有扩展名，按名推断会变成 octet-stream）
+      const declaredType = String(req.headers['x-file-type'] ?? '').trim()
+      const meta = files.save(Buffer.concat(chunks), name, declaredType || undefined)
       log('info', `收到文件 ${meta.name}（${files.humanSize(meta.size)}）→ ${meta.path}`)
       sendJson(res, 200, { ok: true, id: meta.id, name: meta.name, size: meta.size, mime: meta.mime })
       return
@@ -741,6 +743,7 @@ export function apply(ctx) {
   const CLIENTS_PATH = '/api/dsh-podbridge/clients'
   const REVOKE_ONE_PATH = '/api/dsh-podbridge/revoke-one'
   const REVOKE_PATH = '/api/dsh-podbridge/revoke'
+  const SEND_FILE_PATH = '/api/dsh-podbridge/send-file'
 
   function currentConfig() {
     return {
@@ -947,6 +950,44 @@ export function apply(ctx) {
         },
       }),
     )
+
+    // 发文件给客户端。
+    //
+    // 为什么不只依赖 pod_send_file 工具：DSH 的工具可见性在 agent 创建时固定，
+    // 已经存在的会话拿不到之后注册的工具——而桥接绑定的往往正是这种会话。
+    // 端点不受这个限制，脚本与定时任务也能用。
+    s.effect(() =>
+      s.webServer.register({
+        kind: 'exact',
+        path: SEND_FILE_PATH,
+        handler: async (req, res) => {
+          if (req.method !== 'POST') {
+            sendJson(res, 405, { ok: false, error: 'method_not_allowed' })
+            return
+          }
+          let raw = ''
+          for await (const chunk of req) raw += chunk
+          let body
+          try {
+            body = raw ? JSON.parse(raw) : {}
+          } catch {
+            sendJson(res, 400, { ok: false, error: 'invalid_json' })
+            return
+          }
+          try {
+            const meta = await deliverLocalFile(body?.path)
+            const caption = String(body?.caption ?? '').trim()
+            hub.publish('agent', caption, {
+              attachments: [{ id: meta.id, name: meta.name, size: meta.size, mime: meta.mime }],
+            })
+            log('info', `端点发送文件 ${meta.name} → 客户端`)
+            sendJson(res, 200, { ok: true, id: meta.id, name: meta.name, size: meta.size, mime: meta.mime })
+          } catch (error) {
+            sendJson(res, 400, { ok: false, error: String(error?.message ?? error) })
+          }
+        },
+      }),
+    )
   })
 
   // ── 出站：pod_send_file 工具 ──────────────────────────────────────────
@@ -981,6 +1022,43 @@ export function apply(ctx) {
     ctx.inject?.(['tools'], (s) => mountTool(s.get('tools')))
   }
 
+  /**
+   * 把本地文件投递给客户端。工具与 HTTP 端点共用这一份实现，
+   * 避免"白名单/上限"两处各写一遍而出现行为漂移。
+   *
+   * 失败时抛错，错误信息面向调用方（模型或脚本）可读。
+   */
+  async function deliverLocalFile(rawPath) {
+    const target = String(rawPath ?? '').trim()
+    if (!target) throw new Error('file_path 不能为空')
+
+    const abs = path.resolve(target)
+    if (!fs.existsSync(abs)) throw new Error(`文件不存在：${abs}`)
+    const stat = fs.statSync(abs)
+    if (!stat.isFile()) throw new Error(`不是文件：${abs}`)
+    if (stat.size > files.maxBytes) {
+      throw new Error(`文件超过上限（${files.humanSize(stat.size)} > ${files.humanSize(files.maxBytes)}）`)
+    }
+
+    // 白名单：配置优先；未配置时用默认（工作区 + 下载目录）
+    if (settings.fileWhitelist) {
+      const configured = String(settings.fileAllowDirs ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+      const base = configured.length > 0 ? configured : defaultAllowDirs()
+      const sessionCwd = await boundSessionCwd()
+      // 文件目录本身永远允许：把收到的文件再发回去是常见需求
+      const allow = [...new Set([...base, ...(sessionCwd ? [sessionCwd] : []), files.root])].map((line) => path.resolve(line))
+      const allowed = allow.some((dir) => abs === dir || abs.startsWith(dir + path.sep))
+      if (!allowed) {
+        throw new Error(`路径不在白名单内（${allow.join('、') || '未配置'}）`)
+      }
+    }
+
+    return files.save(fs.readFileSync(abs), path.basename(abs))
+  }
+
   function mountTool(tools) {
     if (!tools?.register) {
       log('warn', 'tools 服务不可用，pod_send_file 未注册')
@@ -988,8 +1066,8 @@ export function apply(ctx) {
     }
     tools.register({
       name: 'pod_send_file',
-      // 延迟加载：完整 schema 不常驻每轮请求，需要时才展开
-      deferLoading: true,
+      // 不设 deferLoading（延迟加载会让模型这轮看不到它）；
+      // 也不设 when（条件注册求值失败会静默消失）——归属校验在 execute 里做
       description: '把本地文件发给用户的 Pod App。路径必须绝对；超出白名单会被拒绝。',
       parameters: {
         type: 'object',
@@ -1013,53 +1091,30 @@ export function apply(ctx) {
         },
         render: (_args, value) => [{ type: 'text', text: `已发送 ${value?.fileName ?? '文件'}` }],
       },
-      async execute(args) {
-        const target = String(args?.file_path ?? '').trim()
-        if (!target) throw new Error('pod_send_file: file_path 不能为空')
-
-        const abs = path.resolve(target)
-        if (!fs.existsSync(abs)) throw new Error(`pod_send_file: 文件不存在：${abs}`)
-        const stat = fs.statSync(abs)
-        if (!stat.isFile()) throw new Error(`pod_send_file: 不是文件：${abs}`)
-        if (stat.size > files.maxBytes) {
-          throw new Error(`pod_send_file: 文件超过上限（${files.humanSize(stat.size)} > ${files.humanSize(files.maxBytes)}）`)
+      async execute(args, exec) {
+        // 归属校验放在运行期（对齐 qqbot 的做法）：工具对所有会话可见，
+        // 但只有桥接绑定的那个会话能真正发送。
+        const bound = String(settings.sessionId ?? '')
+        const caller = String(exec?.agent?.id ?? '')
+        if (bound === '' || caller !== bound) {
+          throw new Error(
+            `pod_send_file: 只对桥接绑定的会话开放（当前会话 ${caller.slice(0, 12) || '未知'}，绑定 ${bound.slice(0, 12) || '未设置'}）`,
+          )
         }
 
-        // 白名单：默认只允许配置里的目录
-        if (settings.fileWhitelist) {
-          const configured = String(settings.fileAllowDirs ?? '')
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-          // 没配置就用默认：工作区 + 下载目录；工作区取绑定会话的 cwd
-          const base = configured.length > 0 ? configured : defaultAllowDirs()
-          const sessionCwd = await boundSessionCwd()
-          // 文件目录本身永远允许：那是我们自己存的，把收到的文件再发回去是常见需求
-          const allow = [...new Set([...base, ...(sessionCwd ? [sessionCwd] : []), files.root])].map((line) => path.resolve(line))
-          const allowed = allow.some((dir) => abs === dir || abs.startsWith(dir + path.sep))
-          if (!allowed) {
-            throw new Error(
-              `pod_send_file: 路径不在白名单内（${allow.join('、') || '未配置'}）。` +
-                '需要发送其它目录的文件时，请让用户到桥接设置页调整白名单。',
-            )
-          }
+        let meta
+        try {
+          meta = await deliverLocalFile(args?.file_path)
+        } catch (error) {
+          throw new Error(`pod_send_file: ${error?.message ?? error}`)
         }
-
-        // 复制进文件目录，客户端按 id 下载
-        const meta = files.save(fs.readFileSync(abs), path.basename(abs))
         const caption = String(args?.caption ?? '').trim()
         hub.publish('agent', caption, { attachments: [{ id: meta.id, name: meta.name, size: meta.size, mime: meta.mime }] })
         log('info', `已发送文件 ${meta.name} → 客户端`)
         return { fileName: meta.name, fileSize: meta.size, fileId: meta.id }
       },
-    }, {
-      // 只对「绑定的那个会话」可见：其它会话看不到也调不到，零 token 成本
-      when: (context) => {
-        const id = String(settings.sessionId ?? '')
-        return id !== '' && String(context?.agent?.id ?? '') === id
-      },
     })
-    log('info', 'pod_send_file 工具已注册（仅绑定会话可见）')
+    log('info', 'pod_send_file 工具已注册（全局可见，运行期校验绑定会话）')
   }
   // ── 归档会话集合（订阅一次，持续更新）──────────────────────────────────
   // 归档集合改为按需拉取（见 archivedSessionIds），这里不再常驻订阅。

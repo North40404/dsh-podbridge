@@ -91,6 +91,37 @@ New-Item -ItemType Junction `
 | POST | `/api/dsh-podbridge/pairing-code` | 生成 6 位一次性配对码 |
 | POST | `/api/dsh-podbridge/revoke-one` | 按设备指纹吊销一台 |
 | POST | `/api/dsh-podbridge/revoke` | 吊销全部 |
+| POST | `/api/dsh-podbridge/send-file` | 发文件给客户端，见下 |
+
+---
+
+## 发文件的两种入口
+
+`pod_send_file`（工具）与 `POST /api/dsh-podbridge/send-file`（管理端点）共用
+`deliverLocalFile()`：白名单、大小上限、落盘、`hub.publish` 全在一处，不会行为漂移。
+
+请求体（端点）：
+
+```json
+{ "path": "D:\\somewhere\\report.pdf", "caption": "可选说明" }
+```
+
+成功返回 `{ok, id, name, size, mime}`；失败 400 + `{ok:false, error}`。
+
+**选哪个**：
+
+- 会话是**插件注册之后**新建的 → 用工具，模型自己就能调
+- 会话早于插件注册（工具对它不可见），或调用方是脚本/定时任务 → 用端点
+
+**必须知道的四件事**：
+
+1. 工具的可见性在 **agent 创建时固定**：老会话看不到它，插件重载也不会补上。
+2. 工具**不要设 `deferLoading`**：延迟加载会让它不出现在模型当轮的 schema 里，等于不可达。
+3. 端点挂在 **DSH web 端口**（不是桥接的 8787），打到 8787 会 404。
+4. 端点**没有鉴权**，与其它管理端点一样只靠"仅监听 127.0.0.1"。
+   **不要把 web 端口暴露到公网**；对外只暴露 8787（数据面，有 token）。
+
+端点与"服务端主动推送"**都不属于 Pod 协议**，换一个桥接实现不会有它们。
 
 ---
 
